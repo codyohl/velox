@@ -291,14 +291,18 @@ class PlanBuilder {
   PlanBuilder& partialAggregation(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
-      const std::vector<std::string>& masks = {}) {
+      const std::vector<std::string>& masks = {},
+      const std::vector<vector_size_t>& globalGroupingSets = {},
+      const std::optional<column_index_t>& groupIdChannel = std::nullopt) {
     return aggregation(
         groupingKeys,
         {},
         aggregates,
         masks,
         core::AggregationNode::Step::kPartial,
-        false);
+        false,
+        globalGroupingSets,
+        groupIdChannel);
   }
 
   /// Add final aggregation plan node to match the current partial aggregation
@@ -336,14 +340,18 @@ class PlanBuilder {
   /// aggregate expressions and their types.
   PlanBuilder& intermediateAggregation(
       const std::vector<std::string>& groupingKeys,
-      const std::vector<std::string>& aggregates) {
+      const std::vector<std::string>& aggregates,
+      const std::vector<vector_size_t>& globalGroupingSets = {},
+      const std::optional<column_index_t>& groupIdChannel = std::nullopt) {
     return aggregation(
         groupingKeys,
         {},
         aggregates,
         {},
         core::AggregationNode::Step::kIntermediate,
-        false);
+        false,
+        globalGroupingSets,
+        groupIdChannel);
   }
 
   /// Add a single aggregation plan node using specified grouping keys and
@@ -352,14 +360,18 @@ class PlanBuilder {
   PlanBuilder& singleAggregation(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
-      const std::vector<std::string>& masks = {}) {
+      const std::vector<std::string>& masks = {},
+      const std::vector<vector_size_t>& globalGroupingSets = {},
+      const std::optional<column_index_t>& groupIdChannel = std::nullopt) {
     return aggregation(
         groupingKeys,
         {},
         aggregates,
         masks,
         core::AggregationNode::Step::kSingle,
-        false);
+        false,
+        globalGroupingSets,
+        groupIdChannel);
   }
 
   /// Add an AggregationNode using specified grouping keys,
@@ -378,14 +390,29 @@ class PlanBuilder {
   /// @param step Aggregation step: partial, final, intermediate or single.
   /// @param ignoreNullKeys Boolean indicating whether to skip input rows where
   /// one of the grouping keys is null.
+  /// @param globalGroupingSets groupId values corresponding to global
+  /// aggregations from an underlying GroupId node used to conpute GroupingSets.
+  /// e.g. If the source GroupId is used for grouping sets {{orderkey}, {}}
+  /// corresponding to groupIds 0 and 1, then globalGroupingSets = {1}
+  /// @param groupIdChannel output channel for groupId column. Used to construct
+  /// a default global output row if the aggregation receives 0 input rows.
   PlanBuilder& aggregation(
       const std::vector<std::string>& groupingKeys,
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
-      bool ignoreNullKeys) {
+      bool ignoreNullKeys,
+      const std::vector<vector_size_t>& globalGroupingSets = {},
+      const std::optional<column_index_t>& groupIdChannel = std::nullopt) {
     return aggregation(
-        groupingKeys, {}, aggregates, masks, step, ignoreNullKeys);
+        groupingKeys,
+        {},
+        aggregates,
+        masks,
+        step,
+        ignoreNullKeys,
+        globalGroupingSets,
+        groupIdChannel);
   }
 
   /// Same as above, but also allows to specify a subset of grouping keys on
@@ -400,7 +427,9 @@ class PlanBuilder {
       const std::vector<std::string>& aggregates,
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
-      bool ignoreNullKeys) {
+      bool ignoreNullKeys,
+      const std::vector<vector_size_t>& globalGroupingSets = {},
+      const std::optional<column_index_t>& groupIdChannel = std::nullopt) {
     return aggregation(
         groupingKeys,
         preGroupedKeys,
@@ -408,7 +437,9 @@ class PlanBuilder {
         masks,
         step,
         ignoreNullKeys,
-        {});
+        {},
+        globalGroupingSets,
+        groupIdChannel);
   }
 
   /// A convenience method to create partial aggregation plan node for the case
@@ -858,7 +889,9 @@ class PlanBuilder {
       const std::vector<std::string>& masks,
       core::AggregationNode::Step step,
       bool ignoreNullKeys,
-      const std::vector<std::vector<TypePtr>>& rawInputTypes);
+      const std::vector<std::vector<TypePtr>>& rawInputTypes,
+      const std::vector<vector_size_t>& globalGroupingSets = {},
+      const std::optional<column_index_t>& groupIdChannel = std::nullopt);
 
   /// Create WindowNode based on whether input is sorted and then compute the
   /// window functions.

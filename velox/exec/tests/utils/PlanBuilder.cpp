@@ -714,7 +714,9 @@ PlanBuilder& PlanBuilder::aggregation(
     const std::vector<std::string>& masks,
     core::AggregationNode::Step step,
     bool ignoreNullKeys,
-    const std::vector<std::vector<TypePtr>>& rawInputTypes) {
+    const std::vector<std::vector<TypePtr>>& rawInputTypes,
+    const std::vector<vector_size_t>& globalGroupingSets,
+    const std::optional<column_index_t>& groupIdChannel) {
   auto aggregatesAndNames = createAggregateExpressionsAndNames(
       aggregates, masks, step, rawInputTypes);
   planNode_ = std::make_shared<core::AggregationNode>(
@@ -724,6 +726,8 @@ PlanBuilder& PlanBuilder::aggregation(
       fields(preGroupedKeys),
       aggregatesAndNames.names,
       aggregatesAndNames.aggregates,
+      globalGroupingSets,
+      groupIdChannel,
       ignoreNullKeys,
       planNode_);
   return *this;

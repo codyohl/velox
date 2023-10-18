@@ -1614,6 +1614,86 @@ TEST_F(AggregationTest, groupingSetsSameKey) {
       "select o_key, o_key as o_key_1, o_status FROM tmp) GROUP BY GROUPING SETS ((o_key, o_key_1), (o_key), (o_key_1), ())");
 }
 
+TEST_F(AggregationTest, groupingSetsEmptyInput) {
+  auto data = makeRowVector(
+      {"o_key", "o_status"},
+      {makeFlatVector<int64_t>({0, 1, 2, 3, 4}),
+       makeFlatVector<std::string>({"", "x", "xx", "xxx", "xxxx"})});
+
+  createDuckDbTable({data});
+
+  auto plan = PlanBuilder()
+                  .values({data})
+                  .filter("o_key < 0")
+                  .groupId({"o_key"}, {{"o_key"}, {}}, {"o_status"})
+                  .singleAggregation(
+                      {"o_key", "group_id"},
+                      {"count(o_status) as count_o_status"},
+                      {},
+                      {1},
+                      1)
+                  .project({"count_o_status"})
+                  .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT count(o_status) as count_o_status FROM tmp WHERE o_key < 0 GROUP BY GROUPING SETS ((o_key), ())");
+
+  plan = PlanBuilder()
+             .values({data})
+             .filter("o_key < 0")
+             .groupId({"o_key"}, {{"o_key"}, {}}, {"o_status"})
+             .partialAggregation(
+                 {"o_key", "group_id"},
+                 {"count(o_status) as count_o_status"},
+                 {},
+                 {1},
+                 1)
+             .finalAggregation()
+             .project({"count_o_status"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT count(o_status) as count_o_status FROM tmp WHERE o_key < 0 GROUP BY GROUPING SETS ((o_key), ())");
+
+  plan = PlanBuilder()
+             .values({data})
+             .filter("o_key < 0")
+             .groupId({"o_key"}, {{"o_key"}, {}}, {"o_status"})
+             .partialAggregation(
+                 {"o_key", "group_id"},
+                 {"count(o_status) as count_o_status"},
+                 {},
+                 {1},
+                 1)
+             .intermediateAggregation()
+             .finalAggregation()
+             .project({"count_o_status"})
+             .planNode();
+
+  assertQuery(
+      plan,
+      "SELECT count(o_status) as count_o_status FROM tmp WHERE o_key < 0 GROUP BY GROUPING SETS ((o_key), ())");
+
+  plan = PlanBuilder()
+             .values({data})
+             .filter("o_key < 0")
+             .groupId({"o_key"}, {{}, {}}, {"o_status"})
+             .partialAggregation(
+                 {"o_key", "group_id"},
+                 {"count(o_status) as count_o_status"},
+                 {},
+                 {1, 2},
+                 1)
+             .intermediateAggregation()
+             .finalAggregation()
+             .project({"count_o_status"})
+             .planNode();
+
+  assertQuery(plan, makeRowVector({makeFlatVector<int64_t>({0, 0})}));
+}
+
 TEST_F(AggregationTest, outputBatchSizeCheckWithSpill) {
   const int numVectors = 5;
   const int vectorSize = 20;

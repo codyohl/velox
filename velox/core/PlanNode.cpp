@@ -90,6 +90,20 @@ RowTypePtr getAggregationOutputType(
 
   return std::make_shared<RowType>(std::move(names), std::move(types));
 }
+
+core::AggregationNode::GroupingSetDescriptor getGlobalGroupingSets(
+    const std::vector<vector_size_t>& globalGroupingSets,
+    const std::optional<const std::string>& groupIdName,
+    const RowTypePtr& outputType) {
+  std::optional<column_index_t> groupIdChannel;
+  if (groupIdName.has_value()) {
+    groupIdChannel = outputType->getChildIdxIfExists(groupIdName.value());
+    if (groupIdChannel.has_value()) {
+      VELOX_CHECK(outputType->childAt(groupIdChannel.value())->isBigint());
+    }
+  }
+  return {groupIdChannel, globalGroupingSets};
+}
 } // namespace
 
 AggregationNode::AggregationNode(
@@ -99,6 +113,8 @@ AggregationNode::AggregationNode(
     const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
     const std::vector<std::string>& aggregateNames,
     const std::vector<Aggregate>& aggregates,
+    const std::vector<vector_size_t>& globalGroupingSets,
+    const std::optional<const std::string>& groupIdName,
     bool ignoreNullKeys,
     PlanNodePtr source)
     : PlanNode(id),
@@ -112,7 +128,9 @@ AggregationNode::AggregationNode(
       outputType_(getAggregationOutputType(
           groupingKeys_,
           aggregateNames_,
-          aggregates_)) {
+          aggregates_)),
+      groupingSets_(
+          getGlobalGroupingSets(globalGroupingSets, groupIdName, outputType_)) {
   // Empty grouping keys are used in global aggregation:
   //    SELECT sum(c) FROM t
   // Empty aggregates are used in distinct:
@@ -135,6 +153,54 @@ AggregationNode::AggregationNode(
         key->name());
   }
 }
+
+AggregationNode::AggregationNode(
+    const PlanNodeId& id,
+    Step step,
+    const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+    const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
+    const std::vector<std::string>& aggregateNames,
+    const std::vector<Aggregate>& aggregates,
+    const std::vector<vector_size_t>& globalGroupingSets,
+    const std::optional<column_index_t>& groupIdChannel,
+    bool ignoreNullKeys,
+    PlanNodePtr source)
+    : PlanNode(id),
+      step_(step),
+      groupingKeys_(groupingKeys),
+      preGroupedKeys_(preGroupedKeys),
+      aggregateNames_(aggregateNames),
+      aggregates_(aggregates),
+      ignoreNullKeys_(ignoreNullKeys),
+      sources_{source},
+      outputType_(getAggregationOutputType(
+          groupingKeys_,
+          aggregateNames_,
+          aggregates_)),
+      groupingSets_({groupIdChannel, globalGroupingSets}) {}
+
+AggregationNode::AggregationNode(
+    const PlanNodeId& id,
+    Step step,
+    const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+    const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
+    const std::vector<std::string>& aggregateNames,
+    const std::vector<Aggregate>& aggregates,
+    bool ignoreNullKeys,
+    PlanNodePtr source)
+    : PlanNode(id),
+      step_(step),
+      groupingKeys_(groupingKeys),
+      preGroupedKeys_(preGroupedKeys),
+      aggregateNames_(aggregateNames),
+      aggregates_(aggregates),
+      ignoreNullKeys_(ignoreNullKeys),
+      sources_{source},
+      outputType_(getAggregationOutputType(
+          groupingKeys_,
+          aggregateNames_,
+          aggregates_)),
+      groupingSets_({std::nullopt, {}}) {}
 
 namespace {
 void addFields(
@@ -253,6 +319,7 @@ folly::dynamic AggregationNode::serialize() const {
     obj["aggregates"].push_back(aggregate.serialize());
   }
 
+  obj["groupingSets"] = ISerializable::serialize(groupingSets_);
   obj["ignoreNullKeys"] = ignoreNullKeys_;
   return obj;
 }
@@ -293,17 +360,33 @@ std::vector<SortOrder> deserializeSortingOrders(const folly::dynamic& array) {
 }
 } // namespace
 
-folly::dynamic AggregationNode::Aggregate::serialize() const {
+folly::dynamic AggregationNode::GroupingSetDescriptor::serialize() const {
   folly::dynamic obj = folly::dynamic::object();
-  obj["call"] = call->serialize();
-  obj["rawInputTypes"] = ISerializable::serialize(rawInputTypes);
-  if (mask) {
-    obj["mask"] = mask->serialize();
+  if (groupIdChannel.has_value()) {
+    obj["groupIdChannel"] = groupIdChannel.value();
   }
-  obj["sortingKeys"] = ISerializable::serialize(sortingKeys);
-  obj["sortingOrders"] = serializeSortingOrders(sortingOrders);
-  obj["distinct"] = distinct;
+
+  auto globalGroupingSetsArray = folly::dynamic::array();
+  for (const auto& globalGroup : globalGroupingSets) {
+    globalGroupingSetsArray.push_back(globalGroup);
+  }
+  obj["globalGroupingSets"] = globalGroupingSetsArray;
   return obj;
+}
+
+// static
+AggregationNode::GroupingSetDescriptor
+AggregationNode::GroupingSetDescriptor::deserialize(
+    const folly::dynamic& obj,
+    void* context) {
+  std::optional<column_index_t> groupIdChannel;
+  if (obj.count("groupIdChannel")) {
+    groupIdChannel = obj["groupIdChannel"].asInt();
+  }
+  auto globalGroupingSets =
+      ISerializable::deserialize<std::vector<vector_size_t>>(
+          obj["globalGroupingSets"]);
+  return {groupIdChannel, globalGroupingSets};
 }
 
 // static
@@ -329,6 +412,19 @@ AggregationNode::Aggregate AggregationNode::Aggregate::deserialize(
       distinct};
 }
 
+folly::dynamic AggregationNode::Aggregate::serialize() const {
+  folly::dynamic obj = folly::dynamic::object();
+  obj["call"] = call->serialize();
+  obj["rawInputTypes"] = ISerializable::serialize(rawInputTypes);
+  if (mask) {
+    obj["mask"] = mask->serialize();
+  }
+  obj["sortingKeys"] = ISerializable::serialize(sortingKeys);
+  obj["sortingOrders"] = serializeSortingOrders(sortingOrders);
+  obj["distinct"] = distinct;
+  return obj;
+}
+
 // static
 PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
   auto source = deserializeSingleSource(obj, context);
@@ -342,6 +438,9 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
     aggregates.push_back(Aggregate::deserialize(aggregate, context));
   }
 
+  auto groupingSetsDescriptor =
+      GroupingSetDescriptor::deserialize(obj["groupingSets"], context);
+
   return std::make_shared<AggregationNode>(
       deserializePlanNodeId(obj),
       stepFromName(obj["step"].asString()),
@@ -349,6 +448,8 @@ PlanNodePtr AggregationNode::create(const folly::dynamic& obj, void* context) {
       preGroupedKeys,
       aggregateNames,
       aggregates,
+      groupingSetsDescriptor.globalGroupingSets,
+      groupingSetsDescriptor.groupIdChannel,
       obj["ignoreNullKeys"].asBool(),
       deserializeSingleSource(obj, context));
 }

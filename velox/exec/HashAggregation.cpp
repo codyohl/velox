@@ -220,6 +220,8 @@ HashAggregation::HashAggregation(
       aggregationNode->ignoreNullKeys(),
       isPartialOutput_,
       isRawInput(aggregationNode->step()),
+      &aggregationNode->globalGroupingSets(),
+      aggregationNode->groupIdChannel(),
       spillConfig_.has_value() ? &spillConfig_.value() : nullptr,
       &numSpillRuns_,
       &nonReclaimableSection_,

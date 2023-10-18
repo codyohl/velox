@@ -522,6 +522,23 @@ class AggregationNode : public PlanNode {
     static Aggregate deserialize(const folly::dynamic& obj, void* context);
   };
 
+  // These fields are set if the aggregation has a GroupId input.
+  struct GroupingSetDescriptor {
+    // Output channel for the group_id column. The group_id column is
+    // populated with the globalGroupingSet number for global aggregation.
+    std::optional<column_index_t> groupIdChannel;
+
+    // These are the global grouping set numbers. Global grouping sets
+    // provide a global aggregation over all the grouping keys.
+    std::vector<vector_size_t> globalGroupingSets;
+
+    folly::dynamic serialize() const;
+
+    static GroupingSetDescriptor deserialize(
+        const folly::dynamic& obj,
+        void* context);
+  };
+
   AggregationNode(
       const PlanNodeId& id,
       Step step,
@@ -529,6 +546,30 @@ class AggregationNode : public PlanNode {
       const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
       const std::vector<std::string>& aggregateNames,
       const std::vector<Aggregate>& aggregates,
+      bool ignoreNullKeys,
+      PlanNodePtr source);
+
+  AggregationNode(
+      const PlanNodeId& id,
+      Step step,
+      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
+      const std::vector<std::string>& aggregateNames,
+      const std::vector<Aggregate>& aggregates,
+      const std::vector<vector_size_t>& globalGroupingSets,
+      const std::optional<const std::string>& groupIdName,
+      bool ignoreNullKeys,
+      PlanNodePtr source);
+
+  AggregationNode(
+      const PlanNodeId& id,
+      Step step,
+      const std::vector<FieldAccessTypedExprPtr>& groupingKeys,
+      const std::vector<FieldAccessTypedExprPtr>& preGroupedKeys,
+      const std::vector<std::string>& aggregateNames,
+      const std::vector<Aggregate>& aggregates,
+      const std::vector<vector_size_t>& globalGroupingSets,
+      const std::optional<column_index_t>& groupIdChannel,
       bool ignoreNullKeys,
       PlanNodePtr source);
 
@@ -562,6 +603,14 @@ class AggregationNode : public PlanNode {
 
   bool ignoreNullKeys() const {
     return ignoreNullKeys_;
+  }
+
+  const std::vector<vector_size_t>& globalGroupingSets() const {
+    return groupingSets_.globalGroupingSets;
+  }
+
+  std::optional<column_index_t> groupIdChannel() const {
+    return groupingSets_.groupIdChannel;
   }
 
   std::string_view name() const override {
@@ -600,6 +649,8 @@ class AggregationNode : public PlanNode {
   const bool ignoreNullKeys_;
   const std::vector<PlanNodePtr> sources_;
   const RowTypePtr outputType_;
+
+  const GroupingSetDescriptor groupingSets_;
 };
 
 inline std::ostream& operator<<(
